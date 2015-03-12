@@ -1,0 +1,791 @@
+;EnableExplicit
+
+; TrayIcon class 1.00 (Windows)
+; April 2010
+; Written by Luis with PB 4.41
+
+; A Traybar Icon implementation for PureBasic (OOP)
+
+; The "main" icon is always set with TrayIcon_Create() or with SetIcon()
+
+; The icons used in the animations are "secondary" icons and when the animation stops
+; the icon in the tray bar reverts to the "main" icon.
+
+; The icons are never copied internally to the object. TrayIcon always reference the icons
+; defined in your program, so don't free them while they're in use.
+
+; The "helper" procedure TrayIcon_GetIconFromRGBA() can be used to convert an RGBA 
+; PureBasic's image to icon format. This can be useful to draw an icon at runtime using the 
+; PB drawings commands and than convert the image into an icon to be used with a TrayIcon object.
+; See the sample program for more info about it.
+
+; The code should be Ascii and Unicode compatible.
+; The code should be 32 and 64 bit compatible.
+
+
+;{ CompilerIf to avoid conflicts if another class has been already included 
+
+CompilerIf Defined(_BaseClass, #PB_Structure) = #False
+
+ ;// BASE CLASS
+ Structure _BaseClass
+  *vtable
+ EndStructure
+
+ ;// VIRTUAL TABLE
+ Macro VTABLE (classname)
+  DataSection
+  vtable_#classname#: 
+ EndMacro
+
+ Macro END_VTABLE
+  EndDataSection
+ EndMacro
+
+;// DEFAULT BASE CONSTRUCTOR, BASE DESTRUCTOR
+
+ Macro CLASS_ALLOCATION (classname) 
+  Define *shared_#classname
+ 
+  Procedure _#classname#_Base_Create()    
+    Protected *this._#classname = AllocateMemory(SizeOf(_#classname))      
+    If *this        
+        *this\vtable = ?vtable_#classname
+    EndIf    
+    ProcedureReturn *this
+  EndProcedure
+
+  Procedure _#classname#_Base_Destroy(*this._#classname)
+    If *this
+        ClearStructure(*this, _#classname)
+        FreeMemory(*this)
+    EndIf    
+  EndProcedure
+ EndMacro
+ 
+CompilerEndIf
+;}
+
+
+;// TRAYICON CLASS DEFINITION STARTS HERE
+ 
+Structure _TI_NOTIFYICONDATA
+ cbSize.l
+CompilerIf (#PB_Compiler_Processor = #PB_Processor_x64)     
+ _padding1.b[4]
+CompilerEndIf     
+ hwnd.i
+ uID.l
+ uFlags.l
+ uCallbackMessage.l
+CompilerIf (#PB_Compiler_Processor = #PB_Processor_x64)
+ _padding2.b[4]
+CompilerEndIf          
+ hIcon.i
+ szTip.c[128]
+ dwState.l
+ dwStateMask.l
+ szInfo.c[256]
+ StructureUnion
+  uTimeout.l
+  uVersion.l
+ EndStructureUnion
+ szInfoTitle.c[64]
+ dwInfoFlags.l
+EndStructure
+
+#TRAY_ICON_NONE     = #NIIF_NONE 
+#TRAY_ICON_INFO     = #NIIF_INFO
+#TRAY_ICON_ERROR    = #NIIF_ERROR
+#TRAY_ICON_WARNING  = #NIIF_WARNING
+ 
+Prototype.i p_GetFileVersionInfoSize (lptstrFilename.p-ascii, *ptr)
+Prototype.i p_GetFileVersionInfo (lptstrFilename.p-ascii, dwHandle, dwLen, *ptr)
+Prototype.i p_VerQueryValue (*pBlock, *lpSubBlock, *lplpBuffer, *puLen)
+
+; -------------------------------------------------------------------
+; // DEFINE OBJECT DATA
+; -------------------------------------------------------------------
+
+Structure _TrayIcon Extends _BaseClass
+ iCacheSize.i
+ nIconID.i
+ hIcon.i
+ hWinParent.i
+ hCurrIcon.i
+ hTransparentIcon.i 
+ 
+ flgBlinking.i
+ hBlinkTimer.i
+ 
+ flgAnimated.i
+ hAnimTimer.i
+ iAnimFrames.i
+ iAnimDelay.i
+ iAnimCycles.i
+ iAnimCurrFrame.i
+ *pFrames
+ 
+ flgHidden.i
+ 
+ sTooltipText.s
+EndStructure
+
+; -------------------------------------------------------------------
+; // DEFINE OBJECT BASE METHODS 
+; // Base_Create() and Base_Destroy()
+; -------------------------------------------------------------------
+
+CLASS_ALLOCATION(TrayIcon)
+
+; -------------------------------------------------------------------
+; // DECLARES
+; -------------------------------------------------------------------
+
+Declare 	_TI_BlinkCallBack (hWnd, iMsg, idEvent, dwTime)
+Declare 	_TI_AnimCallBack (hWnd, iMsg, idEvent, dwTime)
+Declare.i 	_TI_CreateIconFromDual (nImage, nImageMask)
+Declare.i 	_TI_CreateTransparentIcon ()
+Declare.i 	_TI_GetNotifyIconDataSize()
+
+Declare.i 	TrayIcon_Create (hWinParent, hIcon, iUsrMsg, flgHidden)
+Declare.i 	TrayIcon_GetIconFromRGBA (nImageRGBA)
+
+Declare 	_TrayIcon_Destroy (*this._TrayIcon)
+Declare.i 	_TrayIcon_RemoveTooltip (*this._TrayIcon)
+Declare.i 	_TrayIcon_RemoveBalloon (*this._TrayIcon)
+Declare.i 	_TrayIcon_SetTooltip (*this._TrayIcon, sText.s)
+Declare.i 	_TrayIcon_SetIcon (*this._TrayIcon, hIcon)
+Declare.i 	_TrayIcon_Hide (*this._TrayIcon, flgStatus)
+Declare.i 	_TrayIcon_ShowBalloon (*this._TrayIcon, sTitle.s, sText.s, iIconType)
+Declare.i 	_TrayIcon_Blink (*this._TrayIcon, flgStatus)
+Declare.i 	_TrayIcon_SetAnimationFrames (*this._TrayIcon, iFrames)
+Declare.i 	_TrayIcon_SetAnimationDelay (*this._TrayIcon, iDelay)
+Declare.i 	_TrayIcon_LoadFrameIcon (*this._TrayIcon, iFrame, hIcon)
+Declare.i 	_TrayIcon_StartAnimation (*this._TrayIcon, iCycles)
+Declare 	_TrayIcon_StopAnimation (*this._TrayIcon)
+Declare.i 	_TrayIcon_IsBlinking(*this._TrayIcon)
+Declare.i 	_TrayIcon_IsAnimated(*this._TrayIcon)
+Declare.i 	_TrayIcon_IsHidden(*this._TrayIcon)
+
+
+Procedure _TI_BlinkCallBack (hWnd, iMsg, idEvent, dwTime)  
+ Protected tNotify._TI_NOTIFYICONDATA 
+ Protected *this._TrayIcon = idEvent ; obj pointer
+ 
+ If *this\hCurrIcon = *this\hTransparentIcon
+    *this\hCurrIcon = *this\hIcon
+ Else
+    *this\hCurrIcon = *this\hTransparentIcon
+ EndIf
+ 
+ tNotify\cbSize = *this\iCacheSize
+ tNotify\hwnd = *this\hWinParent 
+ tNotify\uID = *this\nIconID
+ 
+ tNotify\uFlags = #NIF_ICON 
+ tNotify\hIcon = *this\hCurrIcon
+ 
+ Shell_NotifyIcon_(#NIM_MODIFY, @tNotify)
+EndProcedure
+
+Procedure _TI_AnimCallBack (hWnd, iMsg, idEvent, dwTime)  
+ Protected hIcon
+ Protected tNotify._TI_NOTIFYICONDATA 
+ Protected *this._TrayIcon = idEvent ; obj pointer
+  
+ hIcon = PeekI(*this\pFrames + SizeOf(Integer) * (*this\iAnimCurrFrame))
+ 
+ If hIcon 
+     tNotify\cbSize = *this\iCacheSize
+     tNotify\hwnd = *this\hWinParent 
+     tNotify\uID = *this\nIconID
+     
+     tNotify\uFlags = #NIF_ICON 
+     tNotify\hIcon = hIcon
+     
+     Shell_NotifyIcon_(#NIM_MODIFY, @tNotify)
+ EndIf
+
+ If *this\iAnimCurrFrame < *this\iAnimFrames - 1
+    *this\iAnimCurrFrame + 1
+ Else
+    *this\iAnimCurrFrame = 0
+    
+    If *this\iAnimCycles <> -1    
+        If *this\iAnimCycles > 1
+            *this\iAnimCycles - 1
+        Else
+            Delay(100)
+            _TrayIcon_StopAnimation(*this)            
+            ProcedureReturn 
+        EndIf
+    EndIf
+ EndIf
+
+EndProcedure
+
+Procedure.i _TI_CreateIconFromDual (nImage, nImageMask)
+  Protected tIcon.ICONINFO
+  
+  tIcon\fIcon = #True
+  tIcon\hbmMask = ImageID(nImageMask)
+  tIcon\hbmColor = ImageID(nImage)
+
+  ProcedureReturn CreateIconIndirect_(@tIcon)   
+EndProcedure
+
+Procedure.i _TI_CreateTransparentIcon ()
+ Protected nImage, nImageMask
+ Protected hIcon
+ 
+ nImage = CreateImage(#PB_Any, 16, 16) 
+ 
+ nImageMask = CreateImage(#PB_Any, 16, 16)
+ 
+ StartDrawing(ImageOutput(nImageMask))
+  Box(0, 0,  16, 16, $FFFFFF)
+ StopDrawing()
+     
+ hIcon = _TI_CreateIconFromDual(nImage, nImageMask)
+ 
+ FreeImage(nImage)
+ 
+ FreeImage(nImageMask)
+ 
+ ProcedureReturn hIcon 
+EndProcedure
+
+
+Procedure.i _TI_GetNotifyIconDataSize()
+
+ Protected hDll = OpenLibrary(#PB_Any,"version.dll")
+ Protected GetFileVersionInfoSize.p_GetFileVersionInfoSize
+ Protected GetFileVersionInfo.p_GetFileVersionInfo 
+ Protected VerQueryValue.p_VerQueryValue
+ Protected iRetVal, iBufSize, iVerMajor, lpdwHandle, *lpBuffer.VS_FIXEDFILEINFO, puLen
+ Protected sBuffer.s
+  
+ If hDll = 0
+    ProcedureReturn #NOTIFYICONDATA_V1_SIZE 
+ EndIf
+ 
+ ; we can use the ascii apis to retrieve these informations
+ 
+ GetFileVersionInfoSize = GetFunction(hDll, "GetFileVersionInfoSizeA")
+ GetFileVersionInfo = GetFunction(hDll, "GetFileVersionInfoA")
+ VerQueryValue = GetFunction(hDll, "VerQueryValueA")
+ 
+ If GetFileVersionInfoSize = 0 Or GetFileVersionInfo = 0 Or VerQueryValue = 0
+    CloseLibrary(hDll)
+    ProcedureReturn #NOTIFYICONDATA_V1_SIZE 
+ EndIf
+ 
+ iBufSize = GetFileVersionInfoSize ("shell32.dll", @lpdwHandle)
+ 
+ If iBufSize
+    iVerMajor = 0
+     
+    sBuffer = Space(iBufSize)
+    
+    ; pseudotypes int the prototypes will take care of the conversions, if needed
+    
+    If GetFileVersionInfo ("shell32.dll", 0, iBufSize, @sBuffer)    
+        If VerQueryValue(@sBuffer, @"\", @*lpBuffer, @puLen)    
+            iVerMajor = *lpBuffer\dwFileVersionMS >> 16
+        EndIf
+    EndIf
+ EndIf
+  
+ CloseLibrary(hDll)
+  
+ If iVerMajor >= 6
+    ProcedureReturn SizeOf(_TI_NOTIFYICONDATA)
+ EndIf
+
+ If iVerMajor >= 5
+    ProcedureReturn #NOTIFYICONDATA_V2_SIZE     
+ EndIf
+  
+ ProcedureReturn #NOTIFYICONDATA_V1_SIZE
+  
+EndProcedure
+
+
+; -------------------------------------------------------------------
+; // PUBLIC OBJECT CREATION
+; -------------------------------------------------------------------
+
+Procedure.i TrayIcon_Create (hWinParent, hIcon, iUsrMsg, flgHidden)
+ Static nIconID
+ Protected tNotify._TI_NOTIFYICONDATA 
+  
+ ; at minimum the New_CLASSNAME() method must invoke CLASSNAME_Base_Create()
+ Protected *this._TrayIcon = _TrayIcon_Base_Create()
+ 
+ If *this
+    nIconID + 1 ; simple enough
+    
+    *this\nIconID = nIconID
+    *this\hWinParent = hWinParent
+    *this\hIcon = hIcon
+    *this\hTransparentIcon = _TI_CreateTransparentIcon()
+    *this\iCacheSize = _TI_GetNotifyIconDataSize() ; caching this
+    
+    *this\flgAnimated = #False
+    *this\flgBlinking = #False    
+
+    If flgHidden
+        tNotify\dwState = #NIS_HIDDEN
+        tNotify\dwStateMask = #NIS_HIDDEN
+        *this\flgHidden = #True
+    Else
+        tNotify\dwState = 0
+        tNotify\dwStateMask = #NIS_HIDDEN 
+        *this\flgHidden = #False
+    EndIf 
+            
+    tNotify\cbSize = *this\iCacheSize
+  
+    tNotify\hwnd = hWinParent
+    tNotify\uID = nIconID
+    tNotify\uFlags = #NIF_MESSAGE | #NIF_ICON | #NIF_STATE
+    tNotify\hIcon = hIcon    
+    tNotify\uCallbackMessage = iUsrMsg
+    tNotify\uTimeout = 10000
+              
+    If OSVersion() < #PB_OS_Windows_2000
+        tNotify\uVersion = 0
+    Else
+        tNotify\uVersion = #NOTIFYICON_VERSION
+    EndIf
+        
+    Shell_NotifyIcon_(#NIM_SETVERSION, @tNotify)
+          
+    Shell_NotifyIcon_(#NIM_ADD, @tNotify)
+ EndIf 
+ 
+ ProcedureReturn *this
+EndProcedure
+
+Procedure.i TrayIcon_GetIconFromRGBA (nImageRGBA)
+ Protected nImage, nImageMask, hIcon, x, y
+ Protected Dim xy(16,16)
+ 
+ If IsImage(nImageRGBA) = #False
+    ProcedureReturn 0
+ EndIf
+ 
+ If ImageDepth(nImageRGBA) <> 32
+    ProcedureReturn 0
+ EndIf
+
+ If ImageWidth(nImageRGBA) <> 16 Or ImageHeight(nImageRGBA) <> 16
+    ProcedureReturn 0
+ EndIf
+ 
+ StartDrawing(ImageOutput(nImageRGBA))
+  DrawingMode(#PB_2DDrawing_AlphaChannel)
+  For x = 0 To 15
+    For y = 0 To 15                
+        If Alpha(Point(x,y)) = 0 ; alpha fully transparent
+            xy(x,y) = #White ; icon's mask fully transparent 
+        Else
+            xy(x,y) = #Black ; icon's mask fully opaque
+        EndIf
+    Next
+  Next 
+ StopDrawing()
+ 
+ nImage = CreateImage(#PB_Any, 16, 16) 
+ 
+ StartDrawing(ImageOutput(nImage))
+  DrawImage(ImageID(nImageRGBA), 0, 0)
+ StopDrawing()
+
+ nImageMask = CreateImage(#PB_Any, 16, 16)
+ 
+ StartDrawing(ImageOutput(nImageMask))
+  For x = 0 To 15
+    For y = 0 To 15
+        Plot(x,y, xy(x,y))
+    Next
+  Next 
+ StopDrawing()
+      
+ hIcon = _TI_CreateIconFromDual(nImage, nImageMask)
+ 
+ FreeImage(nImage)
+ 
+ FreeImage(nImageMask)
+ 
+ ProcedureReturn hIcon
+ 
+EndProcedure
+
+
+
+; -------------------------------------------------------------------
+;// CLASS METHODS
+; -------------------------------------------------------------------
+
+Procedure _TrayIcon_Destroy (*this._TrayIcon)
+ Protected tNotify._TI_NOTIFYICONDATA 
+ Protected *oldWinProc = GetProp_(*this\hWinParent, "oldWinProc")
+ 
+ tNotify\cbSize = *this\iCacheSize 
+ tNotify\hwnd = *this\hWinParent 
+ tNotify\uID = *this\nIconID
+ 
+ If *this\flgBlinking
+    _TrayIcon_Blink (*this, #False)
+ EndIf
+ 
+ If *this\flgAnimated
+    _TrayIcon_StopAnimation (*this)
+ EndIf
+ 
+ If *this\pFrames
+    FreeMemory(*this\pFrames)
+ EndIf
+ 
+ DestroyIcon_(*this\hTransparentIcon) 
+ 
+ Shell_NotifyIcon_(#NIM_DELETE, @tNotify)
+
+ ; at minimum the Destroy() method must invoke CLASSNAME_Base_Destroy()
+ _TrayIcon_Base_Destroy(*this)
+EndProcedure
+
+Procedure.i _TrayIcon_RemoveTooltip (*this._TrayIcon)
+ Protected tNotify._TI_NOTIFYICONDATA 
+ 
+ tNotify\cbSize = *this\iCacheSize
+ tNotify\hwnd = *this\hWinParent 
+ tNotify\uID = *this\nIconID
+ 
+ tNotify\uFlags = #NIF_TIP 
+ 
+ FillMemory(@tNotify\szTip, SizeOf(tNotify\szTip))
+ 
+ *this\sTooltipText = ""
+ 
+ ProcedureReturn Shell_NotifyIcon_(#NIM_MODIFY, @tNotify)
+EndProcedure
+
+Procedure.i _TrayIcon_RemoveBalloon (*this._TrayIcon)
+ Protected tNotify._TI_NOTIFYICONDATA 
+ 
+ tNotify\cbSize = *this\iCacheSize
+ tNotify\hwnd = *this\hWinParent 
+ tNotify\uID = *this\nIconID
+ 
+ tNotify\uFlags = #NIF_INFO
+ 
+ tNotify\dwInfoFlags = #NIIF_NONE
+ 
+ FillMemory(@tNotify\szInfo, SizeOf(tNotify\szInfo))
+ FillMemory(@tNotify\szInfoTitle, SizeOf(tNotify\szInfoTitle))
+  
+ ProcedureReturn Shell_NotifyIcon_(#NIM_MODIFY, @tNotify)
+EndProcedure
+
+Procedure.i _TrayIcon_SetTooltip (*this._TrayIcon, sText.s)
+ Protected tNotify._TI_NOTIFYICONDATA 
+ 
+ tNotify\cbSize = *this\iCacheSize
+ tNotify\hwnd = *this\hWinParent 
+ tNotify\uID = *this\nIconID
+ 
+ tNotify\uFlags = #NIF_TIP
+ 
+ *this\sTooltipText = Left(sText, 63)    
+ 
+ PokeS(@tNotify\szTip, *this\sTooltipText)
+ 
+ ProcedureReturn Shell_NotifyIcon_(#NIM_MODIFY, @tNotify)
+EndProcedure
+
+Procedure.i _TrayIcon_SetIcon (*this._TrayIcon, hIcon)
+ Protected tNotify._TI_NOTIFYICONDATA 
+ 
+ If *this\flgAnimated
+    ProcedureReturn 0
+ EndIf
+
+ tNotify\cbSize = *this\iCacheSize
+ tNotify\hwnd = *this\hWinParent 
+ tNotify\uID = *this\nIconID
+ 
+ tNotify\uFlags = #NIF_ICON 
+ tNotify\hIcon = hIcon
+ 
+ *this\hIcon = hIcon
+ 
+ ProcedureReturn Shell_NotifyIcon_(#NIM_MODIFY, @tNotify)
+EndProcedure
+
+Procedure.i _TrayIcon_Hide (*this._TrayIcon, flgStatus)
+ Protected tNotify._TI_NOTIFYICONDATA 
+
+ tNotify\cbSize = *this\iCacheSize
+ tNotify\hwnd = *this\hWinParent 
+ tNotify\uID = *this\nIconID
+ 
+ tNotify\uFlags = #NIF_STATE 
+  
+ If flgStatus
+    tNotify\dwState = #NIS_HIDDEN
+    tNotify\dwStateMask = #NIS_HIDDEN
+    *this\flgHidden = #True
+ Else
+    tNotify\dwState = 0
+    tNotify\dwStateMask = #NIS_HIDDEN 
+    *this\flgHidden = #False
+ EndIf 
+ 
+ ProcedureReturn Shell_NotifyIcon_(#NIM_MODIFY, @tNotify)
+EndProcedure
+
+
+Procedure.i _TrayIcon_ShowBalloon (*this._TrayIcon, sTitle.s, sText.s, iIconType)
+ Protected tNotify._TI_NOTIFYICONDATA 
+ 
+ tNotify\cbSize = *this\iCacheSize
+ tNotify\hwnd = *this\hWinParent 
+ tNotify\uID = *this\nIconID
+ tNotify\hIcon = *this\hIcon
+ 
+ If *this\flgAnimated 
+    tNotify\uFlags = #NIF_INFO | #NIF_TIP
+ Else
+    tNotify\uFlags = #NIF_INFO | #NIF_ICON | #NIF_TIP
+ EndIf
+ 
+ If *this\sTooltipText
+    PokeS(@tNotify\szTip, *this\sTooltipText)
+ EndIf
+  
+ PokeS(@tNotify\szInfo, Left(sText, 255))
+ PokeS(@tNotify\szInfoTitle, Left(sTitle, 63))
+     
+ tNotify\dwInfoFlags = iIconType
+ 
+ ProcedureReturn Shell_NotifyIcon_(#NIM_MODIFY, @tNotify) 
+EndProcedure
+
+
+Procedure.i _TrayIcon_Blink (*this._TrayIcon, flgStatus)
+ Protected tNotify._TI_NOTIFYICONDATA 
+  
+ If *this\flgBlinking = flgStatus Or *this\flgAnimated
+    ProcedureReturn 0
+ EndIf
+
+ If flgStatus
+    *this\hBlinkTimer = SetTimer_(*this\hWinParent, *this, 500, @_TI_BlinkCallBack())
+    *this\flgBlinking = #True
+    ProcedureReturn *this\hBlinkTimer
+ Else
+    KillTimer_(*this\hWinParent, *this\hBlinkTimer)
+    *this\flgBlinking = #False
+    *this\hCurrIcon = 0
+    ProcedureReturn _TrayIcon_SetIcon (*this, *this\hIcon)
+ EndIf 
+EndProcedure
+ 
+Procedure.i _TrayIcon_SetAnimationFrames (*this._TrayIcon, iFrames)
+ If *this\flgAnimated
+    ProcedureReturn 0
+ EndIf
+ 
+ If *this\pFrames
+    FreeMemory(*this\pFrames)    
+ EndIf
+ 
+ *this\pFrames = AllocateMemory(iFrames * SizeOf(Integer))
+ 
+ If *this\pFrames
+    *this\iAnimFrames = iFrames
+ Else
+    *this\iAnimFrames = 0
+ EndIf
+ 
+ ProcedureReturn *this\pFrames
+EndProcedure
+
+Procedure.i _TrayIcon_SetAnimationDelay (*this._TrayIcon, iDelay)
+ If *this\flgAnimated
+    ProcedureReturn 0
+ EndIf 
+ 
+ If iDelay < 10
+    iDelay = 10
+ ElseIf iDelay > 3000
+    iDelay = 3000
+ EndIf
+ 
+ *this\iAnimDelay = iDelay
+ 
+ ProcedureReturn 1
+EndProcedure
+
+Procedure.i _TrayIcon_LoadFrameIcon (*this._TrayIcon, iFrame, hIcon)
+ If *this\flgAnimated
+    ProcedureReturn 0
+ EndIf
+ 
+ If iFrame >= *this\iAnimFrames
+    ProcedureReturn 0
+ EndIf
+ 
+ PokeI(*this\pFrames + SizeOf(Integer) * iFrame, hIcon)
+
+ ProcedureReturn 1
+EndProcedure
+
+Procedure.i _TrayIcon_StartAnimation (*this._TrayIcon, iCycles)
+ If *this\flgAnimated
+    ProcedureReturn 0
+ EndIf
+
+ If iCycles < -1 Or iCycles = 0 
+    ProcedureReturn 0
+ EndIf
+
+ If *this\flgBlinking
+    _TrayIcon_Blink(*this, 0)
+ EndIf
+
+ *this\iAnimCurrFrame = 0
+ *this\iAnimCycles = iCycles
+ *this\flgAnimated = #True
+ 
+ _TI_AnimCallBack (*this\hWinParent, 0, *this, 0)
+ 
+ *this\hAnimTimer = SetTimer_(*this\hWinParent, *this, *this\iAnimDelay, @_TI_AnimCallBack())
+ 
+ ProcedureReturn *this\hAnimTimer
+EndProcedure
+
+Procedure _TrayIcon_StopAnimation (*this._TrayIcon)
+ If *this\flgAnimated = #False
+    ProcedureReturn 
+ EndIf
+
+ KillTimer_(*this\hWinParent, *this\hAnimTimer)
+ *this\flgAnimated = #False  
+ *this\iAnimCurrFrame = 0
+
+ FreeMemory(*this\pFrames) : *this\pFrames = #Null
+ 
+ _TrayIcon_SetIcon (*this, *this\hIcon)
+EndProcedure
+
+Procedure.i _TrayIcon_IsBlinking(*this._TrayIcon)
+ ProcedureReturn *this\flgBlinking
+EndProcedure
+
+Procedure.i _TrayIcon_IsAnimated(*this._TrayIcon)
+ ProcedureReturn *this\flgAnimated
+EndProcedure
+
+Procedure.i _TrayIcon_IsHidden(*this._TrayIcon)
+ ProcedureReturn *this\flgHidden
+EndProcedure
+
+
+; -------------------------------------------------------------------
+; // DEFINE OBJECT INTERFACE
+; -------------------------------------------------------------------
+
+Interface TrayIcon
+ 
+ ; destroy the tray icon and free the object
+ Destroy()
+ 
+ ; set the text tooltip for the icon
+ SetTooltip (sText.s)
+ 
+ ; show a balloon tooltip with title, text and optionally a system defined icon
+ ShowBalloon (sTitle.s, sText.s, iIconType = #TRAY_ICON_NONE)
+ 
+ ; remove the text tooltip
+ RemoveTooltip()
+ 
+ ; remove the balloon tooltip
+ RemoveBalloon() 
+ 
+ ; change the icon 
+ ; ignored if animation is active
+ SetIcon (hIcon)
+ 
+ ; enable / disable the blinking of the icon
+ ; ignored if animation is active
+ Blink (flgStatus)
+ 
+ ; set the number of frames to be used to animate the icon
+ ; ignored if animation is active
+ SetAnimationFrames (iFrames)
+ 
+ ; set the time to wait in ms. between each frame
+ ; ignored if animation is active
+ SetAnimationDelay (iDelay)
+ 
+ ; load the specified icon in a frame slot (0 based)
+ ; ignored if animation is active
+ LoadFrameIcon (iFrame, hIcon)
+ 
+ ; start the animation and play it forever (-1) or n times (1...n)
+ ; disable blinking if is active
+ StartAnimation (iCycles)
+ 
+ ; stop the animation and discard the animation data freeing memory
+ StopAnimation()
+ 
+ ; hide/show the icon in the tray keeping all the states active
+ Hide (flgStatus)
+ 
+ ; return 0/1 if blinking is inactive/active
+ IsBlinking()
+ 
+ ; return 0/1 if animation is inactive/active
+ IsAnimated()
+ 
+ ; return 0/1 if the tray icon is visible/hidden
+ IsHidden()
+ 
+EndInterface
+
+; -------------------------------------------------------------------
+; // VIRTUAL TABLE (order must match Interface order)
+; -------------------------------------------------------------------
+
+VTABLE (TrayIcon)
+ Data.i @_TrayIcon_Destroy()
+ Data.i @_TrayIcon_SetTooltip()
+ Data.i @_TrayIcon_ShowBalloon()
+ Data.i @_TrayIcon_RemoveTooltip() 
+ Data.i @_TrayIcon_RemoveBalloon()
+ Data.i @_TrayIcon_SetIcon()
+ Data.i @_TrayIcon_Blink()
+ Data.i @_TrayIcon_SetAnimationFrames()
+ Data.i @_TrayIcon_SetAnimationDelay()
+ Data.i @_TrayIcon_LoadFrameIcon()
+ Data.i @_TrayIcon_StartAnimation()
+ Data.i @_TrayIcon_StopAnimation()
+ Data.i @_TrayIcon_Hide()
+ Data.i @_TrayIcon_IsBlinking() 
+ Data.i @_TrayIcon_IsAnimated()
+ Data.i @_TrayIcon_IsHidden()
+END_VTABLE
+
+
+
+; IDE Options = PureBasic 4.41 (Windows - x86)
+; CursorPosition = 2
+; Folding = x-----
+; EnableXP
+; EnableUser
+; Executable = tooltip.exe
+; CPU = 1
