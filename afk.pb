@@ -282,51 +282,6 @@ Procedure AppendTextFile(TextFile.s, LineToAdd.s)
   CloseFile(Handle)
 EndProcedure
 
-;Procedure.i Log_Read_LogText()
-;  If ReadFile(#AFK_CURRENT_LOG, CurrentLogFile$)
-;    ClearList(Logs())
-;    While Eof(#AFK_CURRENT_LOG) = 0
-;      AddElement(Logs())
-;      Logs() = ReadString(#AFK_CURRENT_LOG)
-;    Wend
-;    CloseFile(#AFK_CURRENT_LOG)
-;    ProcedureReturn #True
-;  EndIf
-;  ProcedureReturn #False
-;EndProcedure
-
-;Procedure.i Log_Write_LogText()
-;  If CreateFile(#AFK_CURRENT_LOG, CurrentLogFile$)
-;    ResetList(Logs())
-;    ForEach Logs()
-;      WriteStringN(#AFK_CURRENT_LOG, Logs())
-;    Next
-;    ProcedureReturn #True
-;  EndIf
-;  ProcedureReturn #False
-;EndProcedure
-
-;Procedure KeepLogging(*Interval) ; Thread.
-;  Protected DelayTime=PeekI(*Interval)
-;  Debug "In Logger Thread"
-;  Repeat
-;    Delay(DelayTime)
-;    Protected LogLength.i = CountLinesInTextFile(CurrentLogFile$)
-;    Debug LogLength
-;    Protected BuffLength.i= ListSize(Logs())
-;    Debug BuffLength
-;    If BuffLength > LogLength And CurrentLogFile$ <> "afk.log"
-;      Debug "Writing Log To "+ CurrentLogFile$
-;      If Log_Write_LogText()
-;        Delay(100)
-;        If Log_Read_LogText()
-;          Debug "Log Success"
-;        EndIf
-;      EndIf
-;    EndIf
-;  ForEver
-;EndProcedure
-
 Procedure.i Conf_Read_TriggerWords()
   If ReadFile(#AFK_CONF_TRIGGERWORDS, TriggerWordsFile$)
     ClearList(TriggerWords())
