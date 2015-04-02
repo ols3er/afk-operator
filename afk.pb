@@ -2112,3 +2112,26 @@ DataSection
   anim4: 
   IncludeBinary "spin_4.ico"
 EndDataSection
+
+; IDE Options = PureBasic 5.31 (Windows - x86)
+; CursorPosition = 1465
+; FirstLine = 1196
+; Folding = ----------PAAg9--
+; EnableThread
+; EnableXP
+; Executable = bin\afk.exe
+; Debugger = Standalone
+; EnableCompileCount = 1276
+; EnableBuildCount = 70
+; IncludeVersionInfo
+; VersionField0 = %BUILDCOUNT
+; VersionField1 = %COMPILECOUNT
+; VersionField2 = CyberGhetto Associates (A BG-Technology Services Subsidiary)
+; VersionField3 = AFK Operator IRC Bot
+; VersionField4 = 0
+; VersionField5 = 0.%BUILDCOUNT.%COMPILERCOUNT.0
+; VersionField6 = Modular IRC Bot Framework - Core
+; VersionField7 = AFK Operator
+; VersionField8 = afk.exe
+; VersionField15 = VOS_NT_WINDOWS32
+; VersionField16 = VFT_APP
