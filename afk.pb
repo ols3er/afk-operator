@@ -1,7 +1,7 @@
-IncludeFile "lib\WinHTTP\WinHTTP.pbi"
-IncludeFile "lib\TrayIcon\TrayIcon.pbc"
-IncludeFile "lib\irc_special_chars.pbi"
-XIncludeFile "lib\CryptLib\SSL_Library.pb"
+﻿IncludeFile "WinHTTP.pbi"
+IncludeFile "TrayIcon.pbc"
+IncludeFile "irc_special_chars.pbi"
+XIncludeFile "SSL_Library.pb"
 
 ; Configurable / Variables =============================================================
 Global IRCVersion$ = "0."+Str(#PB_Editor_BuildCount)+"."+Str(#PB_Editor_CompileCount) + " Alpha"
@@ -34,7 +34,6 @@ Global Log_Write_Interval.i = 5000
 Global PingOn = 0 ; Ping Debug
 Global logHandle.l
 Global PM_All_Replies = 0
-Global LogMaxLines.i = 2000
 
 ; TBD By Server (Do Not Edit)
 Global Host.s = ""
@@ -65,7 +64,7 @@ Global BufferSizeRecv.i = 16384
 
 ; Lists
 Global NewList RecText.s()
-;Global NewList Logs.s()
+Global NewList Logs.s()
 Global NewList CurrentUser.s()
 Global NewList CommandStack.s()
 Global NewList CommandStackRun.s()
@@ -94,10 +93,10 @@ EndStructure
 
 Structure IRC_Channel
   ChannelName$
+  UsersInChannel$
   ChannelModes$
   ChannelTopic$
   ScanURLS.i
-  List Users.s()
 EndStructure
 
 Global NewList PluginFuncs.PlugCommand()
@@ -282,6 +281,51 @@ Procedure AppendTextFile(TextFile.s, LineToAdd.s)
   CloseFile(Handle)
 EndProcedure
 
+Procedure.i Log_Read_LogText()
+  If ReadFile(#AFK_CURRENT_LOG, CurrentLogFile$)
+    ClearList(Logs())
+    While Eof(#AFK_CURRENT_LOG) = 0
+      AddElement(Logs())
+      Logs() = ReadString(#AFK_CURRENT_LOG)
+    Wend
+    CloseFile(#AFK_CURRENT_LOG)
+    ProcedureReturn #True
+  EndIf
+  ProcedureReturn #False
+EndProcedure
+
+Procedure.i Log_Write_LogText()
+  If CreateFile(#AFK_CURRENT_LOG, CurrentLogFile$)
+    ResetList(Logs())
+    While NextElement(Logs())
+      WriteStringN(#AFK_CURRENT_LOG, Logs())
+    Wend
+    ProcedureReturn #True
+  EndIf
+  ProcedureReturn #False
+EndProcedure
+
+Procedure KeepLogging(*Interval) ; Thread.
+  Protected DelayTime=PeekI(*Interval)
+  Debug "In Logger Thread"
+  Repeat
+    Delay(DelayTime)
+    Protected LogLength.i = CountLinesInTextFile(CurrentLogFile$)
+    Debug LogLength
+    Protected BuffLength.i= ListSize(Logs())
+    Debug BuffLength
+    If BuffLength > LogLength And CurrentLogFile$ <> "afk.log"
+      Debug "Writing Log To "+ CurrentLogFile$
+      If Log_Write_LogText()
+        Delay(100)
+        If Log_Read_LogText()
+          Debug "Log Success"
+        EndIf
+      EndIf
+    EndIf
+  ForEver
+EndProcedure
+
 Procedure.i Conf_Read_TriggerWords()
   If ReadFile(#AFK_CONF_TRIGGERWORDS, TriggerWordsFile$)
     ClearList(TriggerWords())
@@ -308,17 +352,10 @@ Procedure.i Conf_Write_TriggerWords()
 EndProcedure
 
 Procedure LogText(LogOutput.s)
-  If IsGadget(#DEBUG_MAIN) And (Not FindString(LogOutput, ")PONG :")) And (Not FindString(LogOutput, ")PING :")) And (Not FindString(LogOutput, " 372 "+ Nick + " :"))
+  If IsGadget(#DEBUG_MAIN)
     AddGadgetItem(#DEBUG_MAIN, -1, LogOutput)
-    If CurrentLogFile$ <> "afk.log"
-      OpenFile(#AFK_CURRENT_LOG, CurrentLogFile$)
-      FileSeek(#AFK_CURRENT_LOG, Lof(#AFK_CURRENT_LOG))
-      WriteStringN(#AFK_CURRENT_LOG, LogOutput)
-      CloseFile(#AFK_CURRENT_LOG)
-    EndIf 
-    If CountGadgetItems(#DEBUG_MAIN) > LogMaxLines
-      ClearGadgetItems(#DEBUG_MAIN)
-    EndIf
+    AddElement(Logs())
+    Logs() = LogOutput
     SetGadgetState(#DEBUG_MAIN, CountGadgetItems(#DEBUG_MAIN)- 1)                                   ;/ ListView
     SendMessage_(GadgetID(#DEBUG_MAIN), #LVM_ENSUREVISIBLE, CountGadgetItems(#DEBUG_MAIN)- 1, #True)  ;/ ListIcon
     SendMessage_(GadgetID(#DEBUG_MAIN), #EM_SCROLLCARET, #False, #False)    
@@ -510,7 +547,7 @@ EndProcedure
 Procedure IRCEnumNames(InChannel.s)
   ForEach ChannelsJoined()
     If ChannelsJoined()\ChannelName$ = InChannel
-      ;ChannelsJoined()\UsersInChannel$ = ""
+      ChannelsJoined()\UsersInChannel$ = ""
     EndIf
   Next
   If ConnectionID <> 0
@@ -521,11 +558,9 @@ EndProcedure
 Procedure.s IRCLocate(NickName$)
   Protected ResultString$ = ""
   ForEach ChannelsJoined()
-    ForEach ChannelsJoined()\Users()
-      If Trim(UCase(ChannelsJoined()\Users())) = Trim(UCase(NickName$))
-        ResultString$ = ResultString$ + ChannelsJoined()\ChannelName$ + " "
-      EndIf
-    Next
+    If FindString(ChannelsJoined()\UsersInChannel$, NickName$ + " ")
+      ResultString$ = ResultString$ + ChannelsJoined()\ChannelName$ + " "
+    EndIf 
   Next
   ResultString$ = Trim(ResultString$)
   ProcedureReturn ResultString$
@@ -832,25 +867,28 @@ Procedure UpdateUsersInChan(Channel$, UserList$)
   UserList$ = Trim(UserList$) + " "
   ForEach ChannelsJoined()
     If ChannelsJoined()\ChannelName$ = Channel$
-      If Trim(UserList$) <> ""
-        Protected NameCountCurrent.i = CountString(UserList$, " ")
-        For X = 1 To NameCountCurrent
-          AddElement(ChannelsJoined()\Users())
-          ChannelsJoined()\Users() = StringField(UserList$, X, " ")
-        Next
-        SortList(ChannelsJoined()\Users(), #PB_Sort_Ascending | #PB_Sort_NoCase)
-        Protected Current$ = "@@@@@"
-        ForEach ChannelsJoined()\Users()
-          If ChannelsJoined()\Users() <> Current$
-            Current$ = ChannelsJoined()\Users()
-          Else
-            DeleteElement(ChannelsJoined()\Users())
+      Protected CurrentList$ = ChannelsJoined()\UsersInChannel$
+      If Trim(CurrentList$) = ""
+        ChannelsJoined()\UsersInChannel$ = UserList$
+        ProcedureReturn
+      ElseIf Trim(CurrentList$) = Trim(UserList$)
+        ProcedureReturn
+      Else
+        Protected CurrentNickCount.i = CountString(CurrentList$, " ") + 1
+        Protected AddListCount.i = CountString(UserList$, " ")
+        Protected A.i,B.i
+        For A = 1 To AddListCount
+          Protected SearchStr$ = StringField(UserList$, A, " ")
+          Debug "Searching For '" + SearchStr$ +"'"
+          If Not FindString(CurrentList$, SearchStr$)
+            Debug "Adding '" + SearchStr$ +"'"
+            CurrentList$ = CurrentList$ + " " + SearchStr$
           EndIf
         Next
-        Debug "Current List:" ; ***
-        ForEach ChannelsJoined()\Users() ; ***
-          Debug ChannelsJoined()\Users() ; ***
-        Next ; ***
+        ChannelsJoined()\UsersInChannel$ = CurrentList$
+        ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "    ", " ")
+        ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "   ", " ")
+        ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "  ", " ")
       EndIf
     EndIf
   Next
@@ -860,7 +898,7 @@ Procedure SearchUsers(Params$, ReplyTo$)
   Params$ = Trim(Params$)
   FoundChannels$ = IRCLocate(Params$)
   If FoundChannels$ <> ""
-    IRCSendText(ReplyTo$, "[*] '" + Params$ + "' seen in: " + FoundChannels$)
+    IRCSendText(ReplyTo$, "[*] " + Params$ + " seen in: " + FoundChannels$)
     Delay(ms_BetweenLines)
   Else
     IRCSendText(ReplyTo$, "[*] User: " + Params$ + " not currently seen.")
@@ -881,11 +919,7 @@ Procedure ShowChannelUsers(Channel$, ReplyTo$)
   If IsChannel(Channel$)
     ForEach ChannelsJoined()
       If ChannelsJoined()\ChannelName$ = Channel$
-        Protected SendString$ = ""
-        ForEach ChannelsJoined()\Users()
-          SendString$ = SendString$ + ChannelsJoined()\Users() + ", "
-        Next
-        IRCSendText(ReplyTo$, SendString$)
+        IRCSendText(ReplyTo$, ChannelsJoined()\UsersInChannel$)
       EndIf 
     Next
   Else
@@ -901,7 +935,7 @@ Procedure.i UpdateChanList(TheChannel$)
   Next
   AddElement(ChannelsJoined())
   ChannelsJoined()\ChannelName$ = TheChannel$
-  ChannelsJoined()\ScanURLS = 0
+  ChannelsJoined()\ScanURLS = 1
   UpdateChanListView()
   ProcedureReturn #True
 EndProcedure
@@ -921,13 +955,13 @@ EndProcedure
 Procedure.i UserQuit(NickName$)
   Protected Result.i = #False
   ForEach ChannelsJoined()
-    ForEach ChannelsJoined()\Users()
-      If ChannelsJoined()\Users() = NickName$
-        Debug "Removing " + ChannelsJoined()\Users() + " from " + ChannelsJoined()\ChannelName$ ; ***
-        DeleteElement(ChannelsJoined()\Users())
-        Result = #True
-      EndIf
-    Next
+    If FindString(ChannelsJoined()\UsersInChannel$, NickName$)
+      ChannelsJoined()\UsersInChannel$ = RemoveString(ChannelsJoined()\UsersInChannel$, NickName$ + " ")
+      ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "    ", " ")
+      ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "   ", " ")
+      ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "  ", " ")
+      Result = #True
+    EndIf 
   Next
   ProcedureReturn Result
 EndProcedure
@@ -935,12 +969,13 @@ EndProcedure
 Procedure.i UserNick(OldNick$, NewNick$)
   Protected Result.i = #False
   ForEach ChannelsJoined()
-    ForEach ChannelsJoined()\Users()
-      If ChannelsJoined()\Users() = OldNick$
-        ChannelsJoined()\Users() = NewNick$
-        Result = #True
-      EndIf
-    Next
+    If FindString(ChannelsJoined()\UsersInChannel$, OldNick$)
+      ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, OldNick$+" ", NewNick$+" ")
+      ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "    ", " ")
+      ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "   ", " ")
+      ChannelsJoined()\UsersInChannel$ = ReplaceString(ChannelsJoined()\UsersInChannel$, "  ", " ")
+      Result = #True
+    EndIf 
   Next
   ProcedureReturn #False
 EndProcedure
@@ -1338,8 +1373,11 @@ Procedure DisplayUsersIn(SelectedChannel$, UserListGadget.i)
   ClearGadgetItems(UserListGadget)
   ForEach ChannelsJoined()
     If ChannelsJoined()\ChannelName$ = SelectedChannel$
-      ForEach ChannelsJoined()\Users()
-        AddGadgetItem(UserListGadget, -1, ChannelsJoined()\Users())
+      Protected UserList$ = ChannelsJoined()\UsersInChannel$
+      Protected UserCount.i=CountString(UserList$, " ")
+      Protected Start.i = 0
+      For Start = 1 To UserCount + 1
+        AddGadgetItem(UserListGadget, -1, StringField(UserList$, Start, " "))
       Next
     EndIf
   Next
@@ -1400,40 +1438,28 @@ Procedure.s GenerateSeenString(Date$, IRCLine$, NickName$)
 EndProcedure
 
 Procedure SeenInfo(Params$, ReplyTo$)
-  Params$ = Trim(Params$)
   Protected NewList SearchLog.s()
-  If CurrentLogFile$ <> "afk.log" And ReadFile(#AFK_CURRENT_LOG, CurrentLogFile$)
-    Protected LogLength.i = Lof(#AFK_CURRENT_LOG)
-    Protected *LogMem = AllocateMemory(LogLength)
-    If *LogMem
-      Protected Bytes = ReadData(#AFK_CURRENT_LOG, *LogMem, LogLength)
-      If Bytes <> 0
-        Protected LogDataStr$ = PeekS(*LogMem, LogLength)
-        FreeMemory(*LogMem)
-        Debug LogDataStr$
-        Protected LogLineCount.i = CountString(LogDataStr$, #CR$)
-        Debug LogLineCount
-        For I = LogLineCount To 1 Step -1
-          TempLine$ = StringField(LogDataStr$, I, #CR$)
-          StartSearch.i = FindString(TempLine$, ")", 0)+1
-          Protected ActualLine$ = Mid(TempLine$,StartSearch, Len(TempLine$)-StartSearch+1)
-          Debug ActualLine$
-          If UCase(IRCGetFrom(ActualLine$)) = UCase(Params$)
-            IRCSendText(ReplyTo$, GenerateSeenString(StringBetween(TempLine$, "[", "]"), ActualLine$,Params$))
-            If IRCLocate(Params$) <> ""
-              IRCSendText(ReplyTo$, "[*] '"+Params$+ "' is currently in: "+ IRCLocate(Params$))
-              ProcedureReturn
-            EndIf 
-            ProcedureReturn
-          EndIf
-        Next
-      EndIf
+  CopyList(Logs(), SearchLog())
+  SortList(SearchLog(), #PB_Sort_Descending)
+  ResetList(SearchLog())
+  ForEach SearchLog()
+    Protected TextLine$ = SearchLog()
+    Protected StartLine.i = FindString(TextLine$, ")", 0)+1
+    Protected ActualLine$ = Mid(TextLine$,StartLine, Len(TextLine$)-StartLine+1)
+    If IRCGetFrom(ActualLine$) = Params$
+      IRCSendText(ReplyTo$, GenerateSeenString(StringBetween(TextLine$, "[", "]"), ActualLine$,Params$))
+      If IRCLocate(Params$) <> ""
+        IRCSendText(ReplyTo$, "[*] "+Params$+ " is currently in: "+ IRCLocate(Params$))
+        ProcedureReturn
+      EndIf 
+      ProcedureReturn
     EndIf
-    CloseFile(#AFK_CURRENT_LOG)
-  EndIf 
+  Next
+  LastElement(SearchLog())
+  Protected LastDate$ = StringBetween(SearchLog(),"[","]")
   IRCSendText(ReplyTo$, "[*] I have no records of previously seeing '" + Params$ + "'.")
     If IRCLocate(Params$) <> ""
-    IRCSendText(ReplyTo$, "[*] '"+Params$+ "' is currently in: "+ IRCLocate(Params$))
+    IRCSendText(ReplyTo$, "[*] "+Params$+ " is currently in: "+ IRCLocate(Params$))
     ProcedureReturn
   EndIf 
 EndProcedure
@@ -1609,8 +1635,7 @@ Procedure ScanText(*Text)
       If IRCGetFrom(TheText$) = Nick
         UpdateChanList(GetChannel(TheText$))
       Else
-        ;IRCEnumNames(GetChannel(TheText$))
-        UpdateUsersInChan(GetChannel(TheText$), IRCGetFrom(TheText$))
+        IRCEnumNames(GetChannel(TheText$))
       EndIf
     Case "PART"
       If IRCGetFrom(TheText$) = Nick
@@ -1650,7 +1675,7 @@ Procedure ScanText(*Text)
       EndIf
       If NetworkHandle$ <> ""
         CurrentLogFile$ = NetworkHandle$ + ".log"
-        ;Log_Read_LogText()
+        Log_Read_LogText()
       EndIf
     Case "004"
       Protected TempServer$ = StringField(TheText$, 4, " ")
@@ -2049,7 +2074,7 @@ Procedure Main()
                   ZNCPass = GetGadgetText(#EDIT_ZNCPASS)
                   MainLoopThread = CreateThread(@MainLoop(), @MainLoopThread)
                   ;Log_Read_LogText()
-                  ;LoggerThread = CreateThread(@KeepLogging(), @Log_Write_Interval)
+                  LoggerThread = CreateThread(@KeepLogging(), @Log_Write_Interval)
                 Else
                   DisableGadget(#EDIT_HOST, 0)
                   DisableGadget(#EDIT_PORT, 0)
@@ -2064,9 +2089,9 @@ Procedure Main()
                   If IsThread(LoggerThread)
                     KillThread(LoggerThread)
                   EndIf
-                  ;Log_Write_LogText()
+                  Log_Write_LogText()
                   CurrentLogFile$ = ""
-                  ;ClearList(Logs())
+                  ClearList(Logs())
                   ClearList(ChannelsJoined())
                   ClearList(OperListItem())
                   ClearList(PluginFuncs())
@@ -2102,27 +2127,26 @@ Main()
 
 DataSection
   icon1: 
-  IncludeBinary "img\i1.ico"
+  IncludeBinary "i1.ico"
   anim1: 
-  IncludeBinary "img\spin_1.ico"
+  IncludeBinary "spin_1.ico"
   anim2: 
-  IncludeBinary "img\spin_2.ico"
+  IncludeBinary "spin_2.ico"
   anim3: 
-  IncludeBinary "img\spin_3.ico"
+  IncludeBinary "spin_3.ico"
   anim4: 
-  IncludeBinary "img\spin_4.ico"
+  IncludeBinary "spin_4.ico"
 EndDataSection
 
 ; IDE Options = PureBasic 5.31 (Windows - x86)
-; CursorPosition = 95
-; FirstLine = 51
-; Folding = ----------PAAg9--
+; CursorPosition = 402
+; FirstLine = 363
+; Folding = ---------L+BEAA+-
 ; EnableThread
 ; EnableXP
 ; Executable = bin\afk.exe
-; Debugger = Standalone
-; EnableCompileCount = 1281
-; EnableBuildCount = 70
+; EnableCompileCount = 1220
+; EnableBuildCount = 57
 ; IncludeVersionInfo
 ; VersionField0 = %BUILDCOUNT
 ; VersionField1 = %COMPILECOUNT
