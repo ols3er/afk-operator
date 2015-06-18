@@ -1,7 +1,7 @@
-IncludeFile "WinHTTP.pbi"
-IncludeFile "TrayIcon.pbc"
-IncludeFile "irc_special_chars.pbi"
-XIncludeFile "SSL_Library.pb"
+IncludeFile "lib\WinHTTP\WinHTTP.pbi"
+IncludeFile "lib\TrayIcon\TrayIcon.pbc"
+IncludeFile "lib\irc_special_chars.pbi"
+XIncludeFile "lib\CryptLib\SSL_Library.pb"
 
 ; Configurable / Variables =============================================================
 Global IRCVersion$ = "0."+Str(#PB_Editor_BuildCount)+"."+Str(#PB_Editor_CompileCount) + " Alpha"
@@ -2102,26 +2102,26 @@ Main()
 
 DataSection
   icon1: 
-  IncludeBinary "i1.ico"
+  IncludeBinary "img\i1.ico"
   anim1: 
-  IncludeBinary "spin_1.ico"
+  IncludeBinary "img\spin_1.ico"
   anim2: 
-  IncludeBinary "spin_2.ico"
+  IncludeBinary "img\spin_2.ico"
   anim3: 
-  IncludeBinary "spin_3.ico"
+  IncludeBinary "img\spin_3.ico"
   anim4: 
-  IncludeBinary "spin_4.ico"
+  IncludeBinary "img\spin_4.ico"
 EndDataSection
 
 ; IDE Options = PureBasic 5.31 (Windows - x86)
-; CursorPosition = 1465
-; FirstLine = 1196
+; CursorPosition = 95
+; FirstLine = 51
 ; Folding = ----------PAAg9--
 ; EnableThread
 ; EnableXP
 ; Executable = bin\afk.exe
 ; Debugger = Standalone
-; EnableCompileCount = 1276
+; EnableCompileCount = 1281
 ; EnableBuildCount = 70
 ; IncludeVersionInfo
 ; VersionField0 = %BUILDCOUNT

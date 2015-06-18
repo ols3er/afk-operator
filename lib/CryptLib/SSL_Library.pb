@@ -822,8 +822,8 @@ ProcedureReturn result
 EndProcedure
 
 ; IDE Options = PureBasic 5.31 (Windows - x86)
-; CursorPosition = 475
-; FirstLine = 193
+; CursorPosition = 24
+; FirstLine = 8
 ; Folding = PAAA-
 ; EnableUnicode
 ; EnableXP
